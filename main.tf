@@ -70,6 +70,15 @@ module "leaf_tls_self_signed_cert" {
   ]
 }
 
+data "terraform_remote_state" "network" {
+  backend = "s3"
+  config = {
+    bucket = "terraform-state-prod"
+    key    = "network/terraform.tfstate"
+    region = "us-east-1"
+  }
+}
+
 data "template_file" "bastion_user_data" {
   template = "${file("${path.module}/../../templates/best-practices-bastion-systemd.sh.tpl")}"
 
