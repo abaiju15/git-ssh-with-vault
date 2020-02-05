@@ -31,6 +31,7 @@ Follow along to quickly set up all your infrastructure and have it production re
 Things you will need to install:
 
 - [Terraform](https://www.terraform.io/downloads.html) (you can forgo this if you're going to install Terraform Switcher)
+- [jq](https://stedolan.github.io/jq/download/)
 
 Things you may want to consider installing:
 
