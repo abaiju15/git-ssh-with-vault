@@ -6,7 +6,7 @@ Vault will securely help store/generate ephemeral secrets to access various reso
 
 The following architecture diagram shows how the Vault cluster is protected by a Bastion host that sits in front of the active Vault server:
 
-![image](full-infrastructure.png)
+![image](infrastructure.png)
 
 The source code is inspired by Hashicorp's best practices guide that can be found [here](https://github.com/hashicorp/vault-guides/tree/master/operations/provision-vault/best-practices/terraform-aws) along with the following webinars:
 
