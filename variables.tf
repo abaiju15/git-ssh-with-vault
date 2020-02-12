@@ -102,4 +102,3 @@ variable "consul_cluster_tag_key" {
   type        = string
   default     = "consul-ab-servers"
 }
-
