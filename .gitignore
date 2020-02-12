@@ -1,2 +1,5 @@
 terraform.tfstate
 .terraform
+*.pem
+*.key
+.DS_Store
