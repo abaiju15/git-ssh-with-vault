@@ -4,9 +4,9 @@ Combining secrets and identity management to seamlessly provide role-based acces
 
 Vault will securely help store/generate ephemeral secrets to access various resources within the AWS cloud. The role-based access will be provided to users belonging to particular teams within an organization in GitHub.
 
-The following architecture diagram shows how the Vault cluster is protected by a Bastion host that sits in front of the active Vault server:
+The following architecture diagram shows how the Vault cluster is fronted by a classic ELB that routes network traffic to the Vault servers:
 
-![image](infrastructure.png)
+![image](infrastructure-dark.png)
 
 The source code is inspired by Hashicorp's best practices guide that can be found [here](https://github.com/hashicorp/vault-guides/tree/master/operations/provision-vault/best-practices/terraform-aws) along with the following webinars:
 
@@ -31,11 +31,6 @@ Follow along to quickly set up all your infrastructure and have it production re
 Things you will need to install:
 
 - [Terraform](https://www.terraform.io/downloads.html) (you can forgo this if you're going to install Terraform Switcher)
-- [jq](https://stedolan.github.io/jq/download/)
-
-Things you may want to consider installing:
-
-- [Terraform Switcher](https://warrensbox.github.io/terraform-switcher/) - this codebase works with an older version of Terraform and `tfswitch` makes it easy to have different versions running on your system
 
 ## Steps
 

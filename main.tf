@@ -1,209 +1,232 @@
-module "ssh_keypair_aws_override" {
-  source = "github.com/hashicorp-modules/ssh-keypair-aws"
+# ---------------------------------------------------------------------------------------------------------------------
+# DEPLOY A VAULT SERVER CLUSTER, AN ELB, AND A CONSUL SERVER CLUSTER IN AWS
+# This is an example of how to use the vault-cluster and vault-elb modules to deploy a Vault cluster in AWS with an
+# Elastic Load Balancer (ELB) in front of it. This cluster uses Consul, running in a separate cluster, as its storage
+# backend.
+# ---------------------------------------------------------------------------------------------------------------------
 
-  name = "${var.name}-override"
+# ----------------------------------------------------------------------------------------------------------------------
+# REQUIRE A SPECIFIC TERRAFORM VERSION OR HIGHER
+# This module has been updated with 0.12 syntax, which means it is no longer compatible with any versions below 0.12.
+# ----------------------------------------------------------------------------------------------------------------------
+terraform {
+  required_version = ">= 0.12"
 }
 
-module "consul_auto_join_instance_role" {
-  source = "github.com/hashicorp-modules/consul-auto-join-instance-role-aws"
+# ---------------------------------------------------------------------------------------------------------------------
+# AUTOMATICALLY LOOK UP THE LATEST PRE-BUILT AMI
+# This repo contains a CircleCI job that automatically builds and publishes the latest AMI by building the Packer
+# template at /examples/vault-consul-ami upon every new release. The Terraform data source below automatically looks up
+# the latest AMI so that a simple "terraform apply" will just work without the user needing to manually build an AMI and
+# fill in the right value.
+#
+# !! WARNING !! These example AMIs are meant only convenience when initially testing this repo. Do NOT use these example
+# AMIs in a production setting as those TLS certificate files are publicly available from the Module repo containing
+# this code.
+#
+# NOTE: This Terraform data source must return at least one AMI result or the entire template will fail. See
+# /_ci/publish-amis-in-new-account.md for more information.
+# ---------------------------------------------------------------------------------------------------------------------
+// data "aws_ami" "vault_consul" {
+//   most_recent = true
 
-  name = "${var.name}"
+//   # If we change the AWS Account in which test are run, update this value.
+//   owners = ["562637147889"]
+
+//   filter {
+//     name   = "virtualization-type"
+//     values = ["hvm"]
+//   }
+
+//   filter {
+//     name   = "is-public"
+//     values = ["true"]
+//   }
+
+//   filter {
+//     name   = "name"
+//     values = ["vault-consul-ubuntu-*"]
+//   }
+// }
+
+# ---------------------------------------------------------------------------------------------------------------------
+# DEPLOY THE VAULT SERVER CLUSTER
+# ---------------------------------------------------------------------------------------------------------------------
+
+module "vault_cluster" {
+  # When using these modules in your own templates, you will need to use a Git URL with a ref attribute that pins you
+  # to a specific version of the modules, such as the following example:
+  # source = "github.com/hashicorp/terraform-aws-vault//modules/vault-cluster?ref=v0.0.1"
+  source = "./modules/vault-cluster"
+
+  cluster_name  = var.vault_cluster_name
+  cluster_size  = var.vault_cluster_size
+  instance_type = var.vault_instance_type
+
+  # ami_id    = var.ami_id == null ? data.aws_ami.vault_consul.image_id : var.ami_id
+  ami_id = var.ami_id
+  user_data = data.template_file.user_data_vault_cluster.rendered
+
+  vpc_id     = data.aws_vpc.default.id
+  subnet_ids = data.aws_subnet_ids.default.ids
+
+  # Do NOT use the ELB for the ASG health check, or the ASG will assume all sealed instances are unhealthy and
+  # repeatedly try to redeploy them.
+  health_check_type = "EC2"
+
+  # To make testing easier, we allow requests from any IP address here but in a production deployment, we *strongly*
+  # recommend you limit this to the IP address ranges of known, trusted servers inside your VPC.
+
+  allowed_ssh_cidr_blocks              = ["0.0.0.0/0"]
+  allowed_inbound_cidr_blocks          = ["0.0.0.0/0"]
+  allowed_inbound_security_group_ids   = []
+  allowed_inbound_security_group_count = 0
+  ssh_key_name                         = var.ssh_key_name
 }
 
-resource "random_id" "consul_encrypt" {
-  byte_length = 16
+# ---------------------------------------------------------------------------------------------------------------------
+# ATTACH IAM POLICIES FOR CONSUL
+# To allow our Vault servers to automatically discover the Consul servers, we need to give them the IAM permissions from
+# the Consul AWS Module's consul-iam-policies module.
+# ---------------------------------------------------------------------------------------------------------------------
+
+module "consul_iam_policies_servers" {
+  source = "github.com/hashicorp/terraform-aws-consul.git//modules/consul-iam-policies?ref=v0.7.0"
+
+  iam_role_id = module.vault_cluster.iam_role_id
 }
 
-module "root_tls_self_signed_ca" {
-   source = "github.com/hashicorp-modules/tls-self-signed-cert"
+# ---------------------------------------------------------------------------------------------------------------------
+# THE USER DATA SCRIPT THAT WILL RUN ON EACH VAULT SERVER WHEN IT'S BOOTING
+# This script will configure and start Vault
+# ---------------------------------------------------------------------------------------------------------------------
 
-  name              = "${var.name}-root"
-  ca_common_name    = "${var.common_name}"
-  organization_name = "${var.organization_name}"
-  common_name       = "${var.common_name}"
-  download_certs    = "${var.download_certs}"
-
-  validity_period_hours = "8760"
-
-  ca_allowed_uses = [
-    "cert_signing",
-    "key_encipherment",
-    "digital_signature",
-    "server_auth",
-    "client_auth",
-  ]
-}
-
-module "leaf_tls_self_signed_cert" {
-  source = "github.com/hashicorp-modules/tls-self-signed-cert"
-
-  name              = "${var.name}-leaf"
-  organization_name = "${var.organization_name}"
-  common_name       = "${var.common_name}"
-  ca_override       = true
-  ca_key_override   = "${module.root_tls_self_signed_ca.ca_private_key_pem}"
-  ca_cert_override  = "${module.root_tls_self_signed_ca.ca_cert_pem}"
-  download_certs    = "${var.download_certs}"
-
-  validity_period_hours = "8760"
-
-  dns_names = [
-    "localhost",
-    "*.node.consul",
-    "*.service.consul",
-    "server.dc1.consul",
-    "*.dc1.consul",
-    "server.${var.name}.consul",
-    "*.${var.name}.consul",
-  ]
-
-  ip_addresses = [
-    "0.0.0.0",
-    "127.0.0.1",
-  ]
-
-  allowed_uses = [
-    "key_encipherment",
-    "digital_signature",
-    "server_auth",
-    "client_auth",
-  ]
-}
-
-data "terraform_remote_state" "network" {
-  backend = "s3"
-  config = {
-    bucket = "terraform-state-prod"
-    key    = "network/terraform.tfstate"
-    region = "us-east-1"
-  }
-}
-
-data "template_file" "bastion_user_data" {
-  template = "${file("${path.module}/../../templates/best-practices-bastion-systemd.sh.tpl")}"
+data "template_file" "user_data_vault_cluster" {
+  template = file("${path.module}/examples/root-example/user-data-vault.sh")
 
   vars = {
-    name            = "${var.name}"
-    provider        = "${var.provider}"
-    local_ip_url    = "${var.local_ip_url}"
-    ca_crt          = "${module.root_tls_self_signed_ca.ca_cert_pem}"
-    leaf_crt        = "${module.leaf_tls_self_signed_cert.leaf_cert_pem}"
-    leaf_key        = "${module.leaf_tls_self_signed_cert.leaf_private_key_pem}"
-    consul_encrypt  = "${random_id.consul_encrypt.b64_std}"
-    consul_override = "${var.consul_client_config_override != "" ? true : false}"
-    consul_config   = "${var.consul_client_config_override}"
+    aws_region               = data.aws_region.current.name
+    consul_cluster_tag_key   = var.consul_cluster_tag_key
+    consul_cluster_tag_value = var.consul_cluster_name
   }
 }
 
-module "network_aws" {
-  source = "github.com/hashicorp-modules/network-aws"
+# ---------------------------------------------------------------------------------------------------------------------
+# PERMIT CONSUL SPECIFIC TRAFFIC IN VAULT CLUSTER
+# To allow our Vault servers consul agents to communicate with other consul agents and participate in the LAN gossip,
+# we open up the consul specific protocols and ports for consul traffic
+# ---------------------------------------------------------------------------------------------------------------------
 
-  name              = "${var.name}"
-  vpc_cidr          = "${var.vpc_cidr}"
-  vpc_cidrs_public  = "${var.vpc_cidrs_public}"
-  nat_count         = "${var.nat_count}"
-  vpc_cidrs_private = "${var.vpc_cidrs_private}"
-  release_version   = "${var.bastion_release}"
-  consul_version    = "${var.bastion_consul_version}"
-  vault_version     = "${var.bastion_vault_version}"
-  os                = "${var.bastion_os}"
-  os_version        = "${var.bastion_os_version}"
-  bastion_count     = "${var.bastion_servers}"
-  instance_profile  = "${module.consul_auto_join_instance_role.instance_profile_id}" # Override instance_profile
-  instance_type     = "${var.bastion_instance}"
-  image_id          = "${var.bastion_image_id}"
-  user_data         = "${data.template_file.bastion_user_data.rendered}" # Override user_data
-  ssh_key_name      = "${module.ssh_keypair_aws_override.name}"
-  ssh_key_override  = true
-  private_key_file  = "${module.ssh_keypair_aws_override.private_key_filename}"
-  tags              = "${var.network_tags}"
+module "security_group_rules" {
+  source = "github.com/hashicorp/terraform-aws-consul.git//modules/consul-client-security-group-rules?ref=v0.7.0"
+
+  security_group_id = module.vault_cluster.security_group_id
+
+  # To make testing easier, we allow requests from any IP address here but in a production deployment, we *strongly*
+  # recommend you limit this to the IP address ranges of known, trusted servers inside your VPC.
+
+  allowed_inbound_cidr_blocks = ["0.0.0.0/0"]
 }
 
-data "template_file" "consul_user_data" {
-  template = "${file("${path.module}/../../templates/best-practices-consul-systemd.sh.tpl")}"
+# ---------------------------------------------------------------------------------------------------------------------
+# DEPLOY THE ELB
+# ---------------------------------------------------------------------------------------------------------------------
+
+module "vault_elb" {
+  # When using these modules in your own templates, you will need to use a Git URL with a ref attribute that pins you
+  # to a specific version of the modules, such as the following example:
+  # source = "github.com/hashicorp/terraform-aws-vault//modules/vault-elb?ref=v0.0.1"
+  source = "./modules/vault-elb"
+
+  name = var.vault_cluster_name
+
+  vpc_id     = data.aws_vpc.default.id
+  subnet_ids = data.aws_subnet_ids.default.ids
+
+  # Associate the ELB with the instances created by the Vault Autoscaling group
+  vault_asg_name = module.vault_cluster.asg_name
+
+  # To make testing easier, we allow requests from any IP address here but in a production deployment, we *strongly*
+  # recommend you limit this to the IP address ranges of known, trusted servers inside your VPC.
+  allowed_inbound_cidr_blocks = ["0.0.0.0/0"]
+
+  # In order to access Vault over HTTPS, we need a domain name that matches the TLS cert
+  create_dns_entry = var.create_dns_entry
+
+  # Terraform conditionals are not short-circuiting, so we use join as a workaround to avoid errors when the
+  # aws_route53_zone data source isn't actually set: https://github.com/hashicorp/hil/issues/50
+  hosted_zone_id = var.create_dns_entry ? join("", data.aws_route53_zone.selected.*.zone_id) : ""
+
+  domain_name = var.vault_domain_name
+}
+
+# Look up the Route 53 Hosted Zone by domain name
+data "aws_route53_zone" "selected" {
+  count = var.create_dns_entry ? 1 : 0
+  name  = "${var.hosted_zone_domain_name}."
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# DEPLOY THE CONSUL SERVER CLUSTER
+# ---------------------------------------------------------------------------------------------------------------------
+
+module "consul_cluster" {
+  source = "github.com/hashicorp/terraform-aws-consul.git//modules/consul-cluster?ref=v0.7.0"
+
+  cluster_name  = var.consul_cluster_name
+  cluster_size  = var.consul_cluster_size
+  instance_type = var.consul_instance_type
+
+  # The EC2 Instances will use these tags to automatically discover each other and form a cluster
+  cluster_tag_key   = var.consul_cluster_tag_key
+  cluster_tag_value = var.consul_cluster_name
+
+  # ami_id    = var.ami_id == null ? data.aws_ami.vault_consul.image_id : var.ami_id
+  ami_id = var.ami_id
+  user_data = data.template_file.user_data_consul.rendered
+
+  vpc_id     = data.aws_vpc.default.id
+  subnet_ids = data.aws_subnet_ids.default.ids
+
+  # To make testing easier, we allow Consul and SSH requests from any IP address here but in a production
+  # deployment, we strongly recommend you limit this to the IP address ranges of known, trusted servers inside your VPC.
+
+  allowed_ssh_cidr_blocks     = ["0.0.0.0/0"]
+  allowed_inbound_cidr_blocks = ["0.0.0.0/0"]
+  ssh_key_name                = var.ssh_key_name
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# THE USER DATA SCRIPT THAT WILL RUN ON EACH CONSUL SERVER WHEN IT'S BOOTING
+# This script will configure and start Consul
+# ---------------------------------------------------------------------------------------------------------------------
+
+data "template_file" "user_data_consul" {
+  template = file("${path.module}/examples/root-example/user-data-consul.sh")
 
   vars = {
-    name             = "${var.name}"
-    provider         = "${var.provider}"
-    local_ip_url     = "${var.local_ip_url}"
-    ca_crt           = "${module.root_tls_self_signed_ca.ca_cert_pem}"
-    leaf_crt         = "${module.leaf_tls_self_signed_cert.leaf_cert_pem}"
-    leaf_key         = "${module.leaf_tls_self_signed_cert.leaf_private_key_pem}"
-    consul_bootstrap = "${length(module.network_aws.subnet_private_ids)}"
-    consul_encrypt   = "${random_id.consul_encrypt.b64_std}"
-    consul_override  = "${var.consul_client_config_override != "" ? true : false}"
-    consul_config    = "${var.consul_client_config_override}"
+    consul_cluster_tag_key   = var.consul_cluster_tag_key
+    consul_cluster_tag_value = var.consul_cluster_name
   }
 }
 
-module "consul_aws" {
-  source = "github.com/hashicorp-modules/consul-aws"
+# ---------------------------------------------------------------------------------------------------------------------
+# DEPLOY THE CLUSTERS IN THE DEFAULT VPC AND AVAILABILITY ZONES
+# Using the default VPC and subnets makes this example easy to run and test, but it means Consul and Vault are
+# accessible from the public Internet. In a production deployment, we strongly recommend deploying into a custom VPC
+# and private subnets. Only the ELB should run in the public subnets.
+# ---------------------------------------------------------------------------------------------------------------------
 
-  name             = "${var.name}" # Must match network_aws module name for Consul Auto Join to work
-  vpc_id           = "${module.network_aws.vpc_id}"
-  vpc_cidr         = "${module.network_aws.vpc_cidr}"
-  subnet_ids       = "${split(",", var.consul_public ? join(",", module.network_aws.subnet_public_ids) : join(",", module.network_aws.subnet_private_ids))}"
-  release_version  = "${var.consul_release}"
-  consul_version   = "${var.consul_version}"
-  os               = "${var.consul_os}"
-  os_version       = "${var.consul_os_version}"
-  count            = "${var.consul_servers}"
-  instance_profile = "${module.consul_auto_join_instance_role.instance_profile_id}" # Override instance_profile
-  instance_type    = "${var.consul_instance}"
-  image_id         = "${var.consul_image_id}"
-  public           = "${var.consul_public}"
-  use_lb_cert      = true
-  lb_cert          = "${module.leaf_tls_self_signed_cert.leaf_cert_pem}"
-  lb_private_key   = "${module.leaf_tls_self_signed_cert.leaf_private_key_pem}"
-  lb_cert_chain    = "${module.root_tls_self_signed_ca.ca_cert_pem}"
-  user_data        = "${data.template_file.consul_user_data.rendered}" # Custom user_data
-  ssh_key_name     = "${module.ssh_keypair_aws_override.name}"
-  tags             = "${var.consul_tags}"
-  tags_list        = "${var.consul_tags_list}"
+data "aws_vpc" "default" {
+  default = var.use_default_vpc
+  tags    = var.vpc_tags
 }
 
-data "template_file" "vault_user_data" {
-  template = "${file("${path.module}/../../templates/best-practices-vault-systemd.sh.tpl")}"
-
-  vars = {
-    name            = "${var.name}"
-    provider        = "${var.provider}"
-    local_ip_url    = "${var.local_ip_url}"
-    ca_crt          = "${module.root_tls_self_signed_ca.ca_cert_pem}"
-    leaf_crt        = "${module.leaf_tls_self_signed_cert.leaf_cert_pem}"
-    leaf_key        = "${module.leaf_tls_self_signed_cert.leaf_private_key_pem}"
-    consul_encrypt  = "${random_id.consul_encrypt.b64_std}"
-    consul_override = "${var.consul_client_config_override != "" ? true : false}"
-    consul_config   = "${var.consul_client_config_override}"
-    vault_encrypt   = "${random_id.consul_encrypt.b64_std}"
-    vault_override  = "${var.vault_server_config_override != "" ? true : false}"
-    vault_config    = "${var.vault_server_config_override}"
-  }
+data "aws_subnet_ids" "default" {
+  vpc_id = data.aws_vpc.default.id
+  tags   = var.subnet_tags
 }
 
-module "vault_aws" {
-  source = "github.com/hashicorp-modules/vault-aws"
-
-  name             = "${var.name}" # Must match network_aws module name for Consul Auto Join to work
-  vpc_id           = "${module.network_aws.vpc_id}"
-  vpc_cidr         = "${module.network_aws.vpc_cidr}"
-  subnet_ids       = "${split(",", var.vault_public ? join(",", module.network_aws.subnet_public_ids) : join(",", module.network_aws.subnet_private_ids))}"
-  release_version  = "${var.vault_release}"
-  vault_version    = "${var.vault_version}"
-  consul_version   = "${var.consul_version}"
-  os               = "${var.vault_os}"
-  os_version       = "${var.vault_os_version}"
-  count            = "${var.vault_servers}"
-  instance_profile = "${module.consul_auto_join_instance_role.instance_profile_id}" # Override instance_profile
-  instance_type    = "${var.vault_instance}"
-  image_id         = "${var.vault_image_id}"
-  public           = "${var.vault_public}"
-  use_lb_cert      = true
-  lb_cert          = "${module.leaf_tls_self_signed_cert.leaf_cert_pem}"
-  lb_private_key   = "${module.leaf_tls_self_signed_cert.leaf_private_key_pem}"
-  lb_cert_chain    = "${module.root_tls_self_signed_ca.ca_cert_pem}"
-  user_data        = "${data.template_file.vault_user_data.rendered}" # Custom user_data
-  ssh_key_name     = "${module.ssh_keypair_aws_override.name}"
-  tags             = "${var.vault_tags}"
-  tags_list        = "${var.vault_tags_list}"
+data "aws_region" "current" {
 }
+
