@@ -65,4 +65,3 @@ output "ssh_key_name" {
 output "vault_cluster_size" {
   value = var.vault_cluster_size
 }
-
