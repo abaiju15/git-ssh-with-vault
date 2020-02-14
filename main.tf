@@ -102,7 +102,7 @@ module "consul_iam_policies_servers" {
 # ---------------------------------------------------------------------------------------------------------------------
 
 data "template_file" "user_data_vault_cluster" {
-  template = file("${path.module}/examples/root-example/user-data-vault.sh")
+  template = file("${path.module}/modules/scripts-for-modules/user-data-vault.sh")
 
   vars = {
     aws_region               = data.aws_region.current.name
@@ -202,7 +202,7 @@ module "consul_cluster" {
 # ---------------------------------------------------------------------------------------------------------------------
 
 data "template_file" "user_data_consul" {
-  template = file("${path.module}/examples/root-example/user-data-consul.sh")
+  template = file("${path.module}/modules/scripts-for-modules/user-data-consul.sh")
 
   vars = {
     consul_cluster_tag_key   = var.consul_cluster_tag_key

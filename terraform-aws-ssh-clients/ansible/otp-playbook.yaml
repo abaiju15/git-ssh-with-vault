@@ -1,0 +1,11 @@
+---
+- hosts: otp_ssh_clients
+  remote_user: ubuntu
+  become: true
+  tasks:
+    - name: update files on the ssh otp clients
+      script: /Users/ashishbaiju/Documents/git-repos/git-ssh-with-vault/terraform-aws-ssh-clients/ansible/scripts/otp-userdata.sh
+    - name: copy over ca-cert file needed to talk to vault
+      copy:
+        src: /Users/ashishbaiju/.certauth/insightab/ca_public_key.pem
+        dest: /etc/vault-ssh-helper.d/ca_public_key.pem
