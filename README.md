@@ -69,8 +69,6 @@ Go into the `terraform-aws-ssh-clients` directory and modify variables in `varia
 > terraform apply
 ```
 
-_TODO: need to fix the output below._
-
 Make note of the public ip addresses that get written out to the console. These are the IPs you will use on your ansible hosts file in the next step.
 
 ### Step 5: Configure EC2 servers based on your requirements
