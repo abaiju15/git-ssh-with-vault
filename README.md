@@ -105,7 +105,7 @@ Follow these instructions to login to your Vault after it has been unsealed:
 
 To set up Vault with the OTP/CA configuration, you can run the `configure-vault.sh` script in the scripts directory once logged in with your root credentials on an unsealed Vault. Please update the config files within `policies` & `roles` according to your own needs.
 
-For a full recording of the project, please visit [here](https://youtu.be/KTgpCFpkrV8).
+For a full recording of the demo, please visit [here](https://youtu.be/KTgpCFpkrV8).
 
 ## Built With
 
